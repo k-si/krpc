@@ -10,6 +10,7 @@ import (
 	"net"
 	"reflect"
 	"sync"
+	"sync/atomic"
 )
 
 var DefaultServer = NewServer()
@@ -50,7 +51,7 @@ func (s *Server) serve(conn io.ReadWriteCloser) {
 	var mu sync.Mutex // ensure that the order of processing requests is not chaotic
 	for {
 		req, err := s.readRequest(cc)
-		log.Println("request:", req.h, req.argv.Elem())
+		log.Println("request:", req.h, req.args.Elem())
 		if err != nil {
 			if req == nil {
 				req = &request{h: new(codec.Head)}
@@ -85,9 +86,11 @@ func (s *Server) getCodec(conn io.ReadWriteCloser) (codec.Codec, error) {
 	return newCodec(conn), nil
 }
 
+// =================================== handle request ===================================
+
 type request struct {
 	h           *codec.Head
-	argv, reply reflect.Value
+	args, reply reflect.Value
 }
 
 func (s *Server) readRequestHead(cc codec.Codec) (*codec.Head, error) {
@@ -110,8 +113,8 @@ func (s *Server) readRequest(cc codec.Codec) (*request, error) {
 		h: head,
 	}
 	// todo
-	req.argv = reflect.New(reflect.TypeOf(""))
-	if err = cc.ReadBody(req.argv.Interface()); err != nil {
+	req.args = reflect.New(reflect.TypeOf(""))
+	if err = cc.ReadBody(req.args.Interface()); err != nil {
 		log.Println("[krpc] read request body err:", err)
 		return nil, err
 	}
@@ -131,4 +134,49 @@ func (s *Server) handleRequest(cc codec.Codec, req *request, wg *sync.WaitGroup,
 	// todo
 	req.reply = reflect.ValueOf(fmt.Sprintf("krpc response %d", req.h.Seq))
 	s.writeResponse(cc, req.h, req.reply.Interface(), mu)
+}
+
+// =================================== service register ===================================
+
+type methodType struct {
+	method    reflect.Method
+	argsType  reflect.Type
+	replyType reflect.Type
+	numCalls  uint64
+}
+
+func (mt *methodType) NumCalls() uint64 {
+	return atomic.LoadUint64(&mt.numCalls)
+}
+
+func (mt *methodType) newArgv() reflect.Value {
+	var argv reflect.Value
+
+	if mt.argsType.Kind() == reflect.Ptr {
+		argv = reflect.New(mt.argsType.Elem())
+	} else {
+		argv = reflect.New(mt.argsType).Elem()
+	}
+
+	return argv
+}
+
+func (mt *methodType) newReply() reflect.Value {
+	replyv := reflect.New(mt.replyType.Elem()) // reply must be pointer
+
+	switch mt.replyType.Elem().Kind() {
+	case reflect.Map:
+		replyv.Elem().Set(reflect.MakeMap(mt.replyType.Elem()))
+	case reflect.Slice:
+		replyv.Elem().Set(reflect.MakeSlice(mt.replyType.Elem(), 0, 0))
+	}
+
+	return replyv
+}
+
+type service struct {
+	name     string
+	typ      reflect.Type
+	receiver reflect.Value
+	method   map[string]*methodType
 }

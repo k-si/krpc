@@ -13,7 +13,7 @@ import (
 type Call struct {
 	Seq    uint64
 	Method string
-	Argv   interface{}
+	Args   interface{}
 	Reply  interface{}
 	Error  error
 	Done   chan *Call
@@ -71,19 +71,19 @@ func Dial(network, address string, opt *Option) (*Client, error) {
 	return cli, nil
 }
 
-func (cli *Client) Call(method string, argv, reply interface{}) error {
-	call := <-cli.Go(method, argv, reply, make(chan *Call, 1)).Done
+func (cli *Client) Call(method string, args, reply interface{}) error {
+	call := <-cli.Go(method, args, reply, make(chan *Call, 1)).Done
 	return call.Error
 }
 
-func (cli *Client) Go(method string, argv, reply interface{}, done chan *Call) *Call {
+func (cli *Client) Go(method string, args, reply interface{}, done chan *Call) *Call {
 	if done == nil || cap(done) == 1 {
 		done = make(chan *Call, 10)
 	}
 
 	call := &Call{
 		Method: method,
-		Argv:   argv,
+		Args:   args,
 		Reply:  reply,
 		Done:   done,
 	}
@@ -122,7 +122,7 @@ func (cli *Client) send(call *Call) {
 		Error:  "",
 	}
 
-	if err := cli.cc.Write(head, call.Argv); err != nil {
+	if err := cli.cc.Write(head, call.Args); err != nil {
 		c := cli.popCall(seq)
 		if c != nil {
 			c.Error = err
